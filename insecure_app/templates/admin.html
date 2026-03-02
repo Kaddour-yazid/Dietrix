@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Panneau admin</h2>
+  <p>Acces possible aussi avec <code>?admin=1</code>.</p>
+  {% for user in users %}
+    <div class="card">
+      <div><strong>{{ user["username"] }}</strong> ({{ user["role"] }})</div>
+      <div>Mot de passe stocke: <code>{{ user["password"] }}</code></div>
+      <div>Bio: {{ user["bio"] | safe }}</div>
+    </div>
+  {% endfor %}
+{% endblock %}

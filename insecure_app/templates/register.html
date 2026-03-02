@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Inscription</h2>
+  <form method="post">
+    <div><input name="username" placeholder="Nom d'utilisateur"></div>
+    <div><input name="password" type="password" placeholder="Mot de passe"></div>
+    <div>
+      <label>Role</label>
+      <select name="role">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+    </div>
+    <button type="submit">Creer le compte</button>
+  </form>
+  <p>Le role est choisi directement par l'utilisateur.</p>
+{% endblock %}

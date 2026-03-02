@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Profil de {{ user["username"] }}</h2>
+  <div class="card">
+    <div><strong>Role:</strong> {{ user["role"] }}</div>
+    <div><strong>Bio:</strong> {{ user["bio"] | safe }}</div>
+  </div>
+  <form method="post">
+    <div>
+      <label>Bio</label>
+      <textarea name="bio">{{ user["bio"] }}</textarea>
+    </div>
+    <div>
+      <label>Nouveau message</label>
+      <textarea name="post"></textarea>
+    </div>
+    <button type="submit">Enregistrer</button>
+  </form>
+  <h3>Mes messages</h3>
+  {% for post in posts %}
+    <div class="card">{{ post["content"] | safe }}</div>
+  {% else %}
+    <p>Aucun message.</p>
+  {% endfor %}
+{% endblock %}

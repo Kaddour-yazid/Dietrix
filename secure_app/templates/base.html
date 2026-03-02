@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ title or "Secure App" }}</title>
+    <style>
+      body { font-family: sans-serif; margin: 2rem auto; max-width: 900px; }
+      nav a { margin-right: 1rem; }
+      textarea { width: 100%; min-height: 110px; }
+      input, button { margin: 0.3rem 0; padding: 0.4rem; }
+      .flash { background: #eef8ee; border: 1px solid #6a6; padding: 0.7rem; margin: 1rem 0; }
+      .card { border: 1px solid #ddd; padding: 1rem; margin: 1rem 0; }
+      code { background: #f5f5f5; padding: 0.2rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Application Corrigee</h1>
+    <nav>
+      <a href="{{ url_for('index') }}">Accueil</a>
+      <a href="{{ url_for('register') }}">Inscription</a>
+      <a href="{{ url_for('login') }}">Connexion</a>
+      <a href="{{ url_for('profile') }}">Profil</a>
+      <a href="{{ url_for('admin') }}">Admin</a>
+      <a href="{{ url_for('logout') }}">Deconnexion</a>
+    </nav>
+    {% for message in get_flashed_messages() %}
+      <div class="flash">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </body>
+</html>
