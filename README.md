@@ -1,108 +1,67 @@
-# Secure Software Development Demo
+# NutriPlan Studio
 
-Projet pedagogique pour un module de developpement logiciel securise.
+Rebuild of the project as a nutrition and workout planning app with:
 
-## Version principale React + Python
+- `frontend/`: React + Vite + TypeScript
+- `backend_api/`: Python + Flask API
+- `backend_api/nutriplan.db`: SQLite database created automatically
 
-Le depot contient maintenant une version moderne separee en deux parties :
+## Current MVP
 
-- `frontend/` : interface React du questionnaire nutritionnel
-- `backend_api/` : API Flask volontairement vulnerable
+- signup and login
+- password hashing
+- signed bearer tokens
+- one saved intake profile per user
+- BMI, calorie, protein, and hydration estimates
+- generated 7-day meal guidance
+- generated weekly workout plan
 
-Cette version est celle a privilegier pour la demonstration du module.
+## Stack
 
-## Anciennes versions Flask
+- React 19
+- Vite 7
+- TypeScript 5
+- Flask 3
+- SQLite
 
-Les dossiers suivants restent presents pour une comparaison simple serveur-rendu :
+## Run locally
 
-- `insecure_app/` : version Flask vulnerable
-- `secure_app/` : version Flask corrigee
-
-## Fonctionnalites
-
-- inscription et connexion
-- affichage d'un profil
-- publication de messages
-- panneau d'administration
-
-## Scenario pedagogique
-
-L'application simule un formulaire sur les habitudes nutritionnelles :
-
-- plat prefere
-- nombre de repas par jour
-- nombre de collations par semaine
-- quantite d'eau bue par jour
-- type de regime
-- allergies
-- commentaires libres
-
-## Vulnerabilites montrees dans `backend_api` + `frontend`
-
-- mots de passe stockes en clair
-- injection SQL dans la connexion et la recherche
-- XSS stockee dans les champs libres et rendu HTML brut dans React
-- controle d'acces casse sur la vue admin
-- secret en dur
-- session stockee dans `localStorage`
-- absence de validation d'entree
-- absence de protection CSRF
-- endpoint debug exposant les utilisateurs
-- endpoint de reset non protege
-- CORS permissif
-
-## Corrections dans `secure_app`
-
-- hash des mots de passe
-- requetes SQL parametrees
-- echappement des contenus HTML
-- verification serveur du role admin
-- configuration de session plus sure
-- validation des entrees
-- jetons CSRF
-
-## Installation
+1. Create a virtual environment and install Python dependencies:
 
 ```bash
-python -m venv .venv
+py -3 -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+py -3 -m pip install -r requirements.txt
+```
+
+2. Install frontend dependencies:
+
+```bash
 npm run frontend:install
 ```
 
-## Lancement
-
-API vulnerable du questionnaire :
+3. Start the backend:
 
 ```bash
-python backend_api/app.py
+npm run backend:dev
 ```
 
-Frontend React :
+4. Start the frontend in a second terminal:
 
 ```bash
 npm run frontend:dev
 ```
 
-Important : lance l'API et le frontend dans deux terminaux differents, car `python backend_api/app.py` bloque le terminal tant que le serveur tourne.
+Frontend URL:
 
-Versions Flask :
+- `http://localhost:5173`
 
-```bash
-python insecure_app/app.py
-python secure_app/app.py
-```
+Backend URL:
 
-Les applications utilisent des bases SQLite separees dans leur dossier.
+- `http://127.0.0.1:5002`
 
-Compte admin initialise :
+## Notes
 
-- utilisateur : `admin`
-- mot de passe : `Admin123!`
-
-## Usage attendu pour le module
-
-1. Montrer les failles dans le formulaire nutritionnel `backend_api/` et `frontend/`.
-2. Expliquer leur impact.
-3. Montrer ensuite les corrections presentes dans `secure_app`.
-4. Comparer les implementations avec `docs/vulnerabilities.md`.
+- The SQLite database is created on first backend start.
+- Set `NUTRIPLAN_SECRET_KEY` if you want a non-default signing secret.
+- The older Flask demo folders are still present in the repository, but the active app is now `frontend/` + `backend_api/`.

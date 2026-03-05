@@ -1,5 +1,5 @@
 {
-  "name": "pulseboard-frontend",
+  "name": "nutriplan-frontend",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -14,7 +14,10 @@
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.1.4",
+    "typescript": "^5.9.3",
     "vite": "^7.3.1"
   }
 }
