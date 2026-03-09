@@ -4,6 +4,9 @@ import json
 import os
 import re
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +17,26 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "nutriplan.db"
+AI_PLAN_CACHE: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]] = {}
+
+
+def load_env_files() -> None:
+    candidates = [BASE_DIR.parent / ".env", BASE_DIR / ".env"]
+    for path in candidates:
+        if not path.exists():
+            continue
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_files()
 ALLOWED_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DAY_NAMES = [
@@ -57,6 +80,14 @@ def token_serializer() -> URLSafeTimedSerializer:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def today_iso() -> str:
+    return datetime.now().date().isoformat()
+
+
+def current_day_name() -> str:
+    return DAY_NAMES[datetime.now().date().weekday()]
 
 
 def get_db() -> sqlite3.Connection:
@@ -107,6 +138,39 @@ def init_db() -> None:
             allergies TEXT NOT NULL DEFAULT '[]',
             notes TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS meal_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            log_date TEXT NOT NULL,
+            meal_day TEXT NOT NULL,
+            meal_name TEXT NOT NULL,
+            meal_title TEXT NOT NULL,
+            calories INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, log_date, meal_day, meal_name),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS workout_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            log_date TEXT NOT NULL,
+            workout_day TEXT NOT NULL,
+            focus TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(user_id, log_date, workout_day, focus),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS water_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            log_date TEXT NOT NULL,
+            amount_ml INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         """
@@ -553,12 +617,108 @@ def bmi_category(bmi: float) -> str:
     return "Obesity"
 
 
+def day_index_from_name(day_name: str) -> int:
+    try:
+        return DAY_NAMES.index(day_name)
+    except ValueError:
+        return 0
+
+
+def meal_image_url(title: str) -> str:
+    lowered = title.lower()
+    if "salmon" in lowered or "shrimp" in lowered:
+        return "https://images.unsplash.com/photo-1467003909585-2f8a72700288?auto=format&fit=crop&w=1200&q=80"
+    if "chicken" in lowered or "turkey" in lowered:
+        return "https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=1200&q=80"
+    if "yogurt" in lowered or "berries" in lowered:
+        return "https://images.unsplash.com/photo-1488477181946-6428a0291777?auto=format&fit=crop&w=1200&q=80"
+    if "smoothie" in lowered:
+        return "https://images.unsplash.com/photo-1623065422902-30a2d299bbe4?auto=format&fit=crop&w=1200&q=80"
+    if "tofu" in lowered or "vegan" in lowered:
+        return "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=1200&q=80"
+    if "oats" in lowered or "breakfast" in lowered:
+        return "https://images.unsplash.com/photo-1517673400267-0251440c45dc?auto=format&fit=crop&w=1200&q=80"
+    return "https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=1200&q=80"
+
+
+def meal_timing(meal_name: str, training_kind: str) -> tuple[str, str]:
+    if meal_name == "Breakfast":
+        return "07:30", "Breakfast"
+    if meal_name == "Lunch":
+        return "13:00", "Main meal"
+    if meal_name == "Dinner":
+        return ("20:00", "Post-workout dinner") if training_kind == "training" else ("19:30", "Dinner")
+    if meal_name == "Snack":
+        return ("16:30", "Pre-workout snack") if training_kind == "training" else ("16:00", "Snack")
+    return ("21:30", "Evening snack") if training_kind == "training" else ("21:00", "Snack")
+
+
+def workout_window(template_kind: str, index: int) -> str:
+    if template_kind == "training":
+        return "18:00" if index % 2 == 0 else "17:30"
+    return "08:00"
+
+
+def meal_macros(meal_name: str, calories: int) -> tuple[int, int, int]:
+    if meal_name == "Breakfast":
+        protein = max(24, round(calories * 0.28 / 4))
+        carbs = max(28, round(calories * 0.42 / 4))
+    elif meal_name.startswith("Snack"):
+        protein = max(12, round(calories * 0.26 / 4))
+        carbs = max(14, round(calories * 0.34 / 4))
+    elif meal_name == "Lunch":
+        protein = max(30, round(calories * 0.3 / 4))
+        carbs = max(34, round(calories * 0.4 / 4))
+    else:
+        protein = max(28, round(calories * 0.31 / 4))
+        carbs = max(20, round(calories * 0.3 / 4))
+    fats = max(8, round((calories - (protein * 4 + carbs * 4)) / 9))
+    return protein, carbs, fats
+
+
+def meal_recipe(
+    meal_name: str, protein: str, carb: str, vegetable: str, fat: str, snack: str
+) -> tuple[list[str], list[str], int]:
+    if meal_name == "Breakfast":
+        ingredients = [f"160 g {protein}", f"80 g {carb}", f"12 g {fat}", "80 g berries", "2 g cinnamon"]
+        steps = [
+            f"Cook the {carb} until soft and warm.",
+            f"Prepare the {protein} and layer it over the bowl.",
+            f"Finish with {fat}, berries, and cinnamon before serving.",
+        ]
+        return ingredients, steps, 15
+    if meal_name.startswith("Snack"):
+        ingredients = [f"1 serving {snack}", "120 g fruit", "250 ml water or milk"]
+        steps = [
+            f"Prepare the {snack} portion.",
+            "Pair it with fruit or a light drink.",
+            "Use this as a quick recovery or pre-workout snack.",
+        ]
+        return ingredients, steps, 5
+    if meal_name == "Lunch":
+        ingredients = [f"180 g {protein}", f"110 g {carb}", f"140 g {vegetable}", f"10 g {fat}", "5 g herbs"]
+        steps = [
+            f"Cook the {protein} with herbs and light seasoning.",
+            f"Prepare the {carb} and steam or roast the {vegetable}.",
+            f"Plate everything together and finish with {fat}.",
+        ]
+        return ingredients, steps, 25
+    ingredients = [f"190 g {protein}", f"90 g {carb}", f"140 g {vegetable}", f"10 g {fat}", "10 g lemon or herbs"]
+    steps = [
+        f"Cook the {protein} until tender and well seasoned.",
+        f"Prepare the {carb} and soften the {vegetable}.",
+        f"Serve together with {fat} for a calmer high-protein dinner.",
+    ]
+    return ingredients, steps, 30
+
+
 def build_meal_entry(
     meal_name: str,
     profile: dict[str, Any],
     total_calories: int,
     ratio: float,
     day_index: int,
+    training_kind: str,
 ) -> dict[str, Any]:
     style = profile["dietaryStyle"]
     likes = profile["likes"]
@@ -587,20 +747,45 @@ def build_meal_entry(
         title = f"{protein.title()} with {carb} and {vegetable}"
         summary = "High-satiety dinner with protein, produce, and controlled portions."
 
+    time_label, timing_context = meal_timing(meal_name, training_kind)
+    protein_grams, carbs_grams, fats_grams = meal_macros(meal_name, calories)
+    ingredients, steps, cook_time_minutes = meal_recipe(
+        meal_name, protein, carb, vegetable, fat, snack
+    )
+
     return {
         "name": meal_name,
         "title": title,
         "calories": calories,
         "summary": summary,
+        "timeLabel": time_label,
+        "timingContext": timing_context,
+        "imageUrl": meal_image_url(title),
+        "proteinGrams": protein_grams,
+        "carbsGrams": carbs_grams,
+        "fatsGrams": fats_grams,
+        "cookTimeMinutes": cook_time_minutes,
+        "ingredients": ingredients,
+        "steps": steps,
     }
 
 
-def build_meal_plan(profile: dict[str, Any], total_calories: int) -> list[dict[str, Any]]:
+def build_meal_plan(
+    profile: dict[str, Any], total_calories: int, workout_plan: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     distribution = calorie_distribution(profile["mealsPerDay"])
     plan = []
     for day_index, day_name in enumerate(DAY_NAMES):
+        training_kind = workout_plan[day_index]["kind"] if day_index < len(workout_plan) else "recovery"
         meals = [
-            build_meal_entry(meal_name, profile, total_calories, ratio, day_index + index)
+            build_meal_entry(
+                meal_name,
+                profile,
+                total_calories,
+                ratio,
+                day_index + index,
+                training_kind,
+            )
             for index, (meal_name, ratio) in enumerate(distribution)
         ]
         plan.append({"day": day_name, "totalCalories": total_calories, "meals": meals})
@@ -662,19 +847,268 @@ def build_workout_plan(profile: dict[str, Any]) -> list[dict[str, Any]]:
         plan.append(
             {
                 "day": day_name,
+                "kind": template["kind"],
                 "focus": template["focus"],
                 "durationMinutes": duration,
                 "intensity": template["intensity"],
                 "exercises": template["exercises"],
                 "note": template["note"],
+                "suggestedWindow": workout_window(template["kind"], len(plan)),
             }
         )
 
     return plan
 
 
-def build_plan_response(user: sqlite3.Row, profile_row: sqlite3.Row) -> dict[str, Any]:
-    profile = serialize_profile(profile_row)
+def merge_ai_enhancement(
+    parsed: dict[str, Any], meal_plan: list[dict[str, Any]], workout_plan: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ai_meals = parsed.get("mealPlan")
+    ai_workouts = parsed.get("workoutPlan")
+    if not isinstance(ai_meals, list) or not isinstance(ai_workouts, list):
+        return meal_plan, workout_plan
+
+    enhanced_meals = []
+    for day_index, day in enumerate(meal_plan):
+        ai_day = ai_meals[day_index] if day_index < len(ai_meals) and isinstance(ai_meals[day_index], dict) else {}
+        ai_entries = ai_day.get("meals") if isinstance(ai_day.get("meals"), list) else []
+        merged_entries = []
+        for meal_index, meal in enumerate(day["meals"]):
+            ai_meal = ai_entries[meal_index] if meal_index < len(ai_entries) and isinstance(ai_entries[meal_index], dict) else {}
+            title = normalize_text(ai_meal.get("title")) or meal["title"]
+            merged_entries.append(
+                {
+                    **meal,
+                    "title": title,
+                    "summary": normalize_text(ai_meal.get("summary")) or meal["summary"],
+                    "timeLabel": normalize_text(ai_meal.get("timeLabel")) or meal["timeLabel"],
+                    "timingContext": normalize_text(ai_meal.get("timingContext")) or meal["timingContext"],
+                    "imageUrl": meal_image_url(title),
+                }
+            )
+        enhanced_meals.append({**day, "meals": merged_entries})
+
+    enhanced_workouts = []
+    for day_index, workout in enumerate(workout_plan):
+        ai_workout = ai_workouts[day_index] if day_index < len(ai_workouts) and isinstance(ai_workouts[day_index], dict) else {}
+        enhanced_workouts.append(
+            {
+                **workout,
+                "focus": normalize_text(ai_workout.get("focus")) or workout["focus"],
+                "note": normalize_text(ai_workout.get("note")) or workout["note"],
+                "suggestedWindow": normalize_text(ai_workout.get("suggestedWindow")) or workout["suggestedWindow"],
+            }
+        )
+    return enhanced_meals, enhanced_workouts
+
+
+def ai_meta(provider: str, model: str | None, applied: bool, changed: bool) -> dict[str, Any]:
+    return {
+        "provider": provider,
+        "model": model,
+        "applied": applied,
+        "changed": changed,
+    }
+
+
+def try_ollama_enhancement(
+    profile: dict[str, Any], summary: dict[str, Any], meal_plan: list[dict[str, Any]], workout_plan: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    if os.environ.get("OLLAMA_ENABLED", "1") != "1":
+        return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
+
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:1.5b")
+    payload = {
+        "model": model,
+        "stream": False,
+        "format": "json",
+        "think": False,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise nutrition and training planner. "
+                    "Return valid JSON only with keys mealPlan and workoutPlan."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "profile": profile,
+                        "summary": summary,
+                        "mealPlan": meal_plan,
+                        "workoutPlan": workout_plan,
+                        "rules": [
+                            "Keep the same number of days and meal slots.",
+                            "Keep allergies and dislikes out.",
+                            "Keep titles realistic and professional.",
+                            "Meal entries must include title, summary, timeLabel, timingContext.",
+                            "Workout entries must include focus, note, suggestedWindow.",
+                        ],
+                    }
+                ),
+            },
+        ],
+    }
+
+    request_obj = urllib.request.Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request_obj, timeout=45) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+        content = response_payload.get("message", {}).get("content", "")
+        parsed = json.loads(content)
+    except Exception:
+        return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
+
+    enhanced_meals, enhanced_workouts = merge_ai_enhancement(parsed, meal_plan, workout_plan)
+    return enhanced_meals, enhanced_workouts, ai_meta(
+        "ollama", model, True, enhanced_meals != meal_plan or enhanced_workouts != workout_plan
+    )
+
+
+def try_openai_enhancement(
+    profile: dict[str, Any], summary: dict[str, Any], meal_plan: list[dict[str, Any]], workout_plan: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
+
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    payload = {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise nutrition and training planner. "
+                    "Return valid JSON only with keys mealPlan and workoutPlan."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "profile": profile,
+                        "summary": summary,
+                        "mealPlan": meal_plan,
+                        "workoutPlan": workout_plan,
+                        "rules": [
+                            "Keep the same number of days and meal slots.",
+                            "Keep allergies and dislikes out.",
+                            "Keep titles realistic and professional.",
+                            "Meal entries must include title, summary, timeLabel, timingContext.",
+                            "Workout entries must include focus, note, suggestedWindow.",
+                        ],
+                    }
+                ),
+            },
+        ],
+    }
+
+    request_data = json.dumps(payload).encode("utf-8")
+    request_obj = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=request_data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request_obj, timeout=18) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+        content = response_payload["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except Exception:
+        return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
+
+    enhanced_meals, enhanced_workouts = merge_ai_enhancement(parsed, meal_plan, workout_plan)
+    return enhanced_meals, enhanced_workouts, ai_meta(
+        "openai", model, True, enhanced_meals != meal_plan or enhanced_workouts != workout_plan
+    )
+
+
+def try_ai_enhancement(
+    profile: dict[str, Any], summary: dict[str, Any], meal_plan: list[dict[str, Any]], workout_plan: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    ollama_meals, ollama_workouts, ollama_meta = try_ollama_enhancement(
+        profile, summary, meal_plan, workout_plan
+    )
+    if ollama_meta["applied"]:
+        return ollama_meals, ollama_workouts, ollama_meta
+    return try_openai_enhancement(profile, summary, meal_plan, workout_plan)
+
+
+def build_progress_snapshot(user_id: int, calorie_target: int) -> dict[str, Any]:
+    connection = get_db()
+    meal_rows = connection.execute(
+        """
+        SELECT log_date, meal_day, meal_name, calories
+        FROM meal_logs
+        WHERE user_id = ?
+        ORDER BY log_date DESC, created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    workout_rows = connection.execute(
+        """
+        SELECT log_date, workout_day, focus
+        FROM workout_logs
+        WHERE user_id = ?
+        ORDER BY log_date DESC, created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    water_rows = connection.execute(
+        """
+        SELECT log_date, amount_ml
+        FROM water_logs
+        WHERE user_id = ?
+        ORDER BY log_date DESC, created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+
+    today = today_iso()
+    today_calories = sum(int(row["calories"]) for row in meal_rows if row["log_date"] == today)
+    today_water_ml = sum(int(row["amount_ml"]) for row in water_rows if row["log_date"] == today)
+    completed_meals = [f'{row["meal_day"]}|{row["meal_name"]}|{row["log_date"]}' for row in meal_rows]
+    completed_workouts = [f'{row["workout_day"]}|{row["focus"]}|{row["log_date"]}' for row in workout_rows]
+
+    workout_dates = sorted({row["log_date"] for row in workout_rows}, reverse=True)
+    streak = 0
+    expected = datetime.now().date()
+    for raw_date in workout_dates:
+        logged_date = datetime.fromisoformat(raw_date).date()
+        if logged_date == expected:
+            streak += 1
+            expected = expected.fromordinal(expected.toordinal() - 1)
+        elif logged_date < expected:
+            break
+
+    return {
+        "todayCalories": today_calories,
+        "todayWaterMl": today_water_ml,
+        "caloriePercent": min(100, int(round((today_calories / max(calorie_target, 1)) * 100))),
+        "completedMeals": completed_meals,
+        "completedWorkouts": completed_workouts,
+        "workoutStreak": streak,
+        "completedWorkoutsCount": len(completed_workouts),
+    }
+
+
+def build_summary(profile: dict[str, Any]) -> dict[str, Any]:
     weight_kg = float(profile["weightKg"])
     height_cm = float(profile["heightCm"])
     age = int(profile["age"])
@@ -686,24 +1120,50 @@ def build_plan_response(user: sqlite3.Row, profile_row: sqlite3.Row) -> dict[str
     recommended = maintenance + GOAL_ADJUSTMENTS[profile["goal"]]
     calorie_target = profile["dailyCalorieTarget"] or recommended
     protein_grams = int(round(weight_kg * PROTEIN_FACTORS[profile["goal"]]))
-    water_liters = round(max(2.2, weight_kg * 0.033), 1)
+    activity_bonus = (
+        0.25
+        if profile["activityLevel"] == "active"
+        else 0.45 if profile["activityLevel"] == "very_active" else 0.1
+    )
+    workout_bonus = max(0, int(profile["workoutsPerWeek"]) - 3) * 0.08
+    water_liters = round(max(2.2, weight_kg * 0.033 + activity_bonus + workout_bonus), 1)
+
+    return {
+        "bmi": round(bmi, 1),
+        "bmiCategory": bmi_category(bmi),
+        "bmr": bmr,
+        "maintenanceCalories": maintenance,
+        "recommendedCalories": recommended,
+        "calorieTarget": calorie_target,
+        "calorieSource": "custom" if profile["dailyCalorieTarget"] else "calculated",
+        "proteinGrams": protein_grams,
+        "waterLiters": water_liters,
+    }
+
+
+def build_plan_response(user: sqlite3.Row, profile_row: sqlite3.Row, use_ai: bool = False) -> dict[str, Any]:
+    profile = serialize_profile(profile_row)
+    summary = build_summary(profile)
+    calorie_target = summary["calorieTarget"]
+    cache_key = f'{user["id"]}:{profile["updatedAt"]}'
+    workout_plan = build_workout_plan(profile)
+    meal_plan = build_meal_plan(profile, calorie_target, workout_plan)
+    ai_details = ai_meta("rule_based", None, False, False)
+
+    if use_ai:
+        meal_plan, workout_plan, ai_details = try_ai_enhancement(profile, summary, meal_plan, workout_plan)
+        AI_PLAN_CACHE[cache_key] = (meal_plan, workout_plan, ai_details)
+    elif cache_key in AI_PLAN_CACHE:
+        meal_plan, workout_plan, ai_details = AI_PLAN_CACHE[cache_key]
 
     return {
         "user": serialize_user(user),
         "profile": profile,
-        "summary": {
-            "bmi": round(bmi, 1),
-            "bmiCategory": bmi_category(bmi),
-            "bmr": bmr,
-            "maintenanceCalories": maintenance,
-            "recommendedCalories": recommended,
-            "calorieTarget": calorie_target,
-            "calorieSource": "custom" if profile["dailyCalorieTarget"] else "calculated",
-            "proteinGrams": protein_grams,
-            "waterLiters": water_liters,
-        },
-        "workoutPlan": build_workout_plan(profile),
-        "mealPlan": build_meal_plan(profile, calorie_target),
+        "summary": summary,
+        "aiMeta": ai_details,
+        "progress": build_progress_snapshot(user["id"], calorie_target),
+        "workoutPlan": workout_plan,
+        "mealPlan": meal_plan,
     }
 
 
@@ -810,7 +1270,7 @@ def options_handler(_path: str):
 def root():
     return jsonify(
         {
-            "message": "NutriPlan backend API",
+            "message": "DietTricks backend API",
             "health": "http://127.0.0.1:5002/api/health",
             "frontend": "Use the Vite frontend on http://localhost:5173",
         }
@@ -819,7 +1279,7 @@ def root():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "service": "NutriPlan API", "database": DB_PATH.name})
+    return jsonify({"status": "ok", "service": "DietTricks API", "database": DB_PATH.name})
 
 
 @app.route("/api/auth/signup", methods=["POST"])
@@ -965,7 +1425,7 @@ def upsert_profile():
     return jsonify(
         {
             "message": "Profile saved. Your weekly plan has been updated.",
-            "plan": build_plan_response(user, profile_row),
+            "plan": build_plan_response(user, profile_row, use_ai=True),
         }
     )
 
@@ -983,8 +1443,116 @@ def plan():
     return jsonify(build_plan_response(user, profile_row))
 
 
+@app.route("/api/progress/meals", methods=["POST"])
+def log_meal():
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required."}), 401
+
+    payload = json_payload()
+    meal_day = normalize_text(payload.get("day"))
+    meal_name = normalize_text(payload.get("mealName"))
+    meal_title = normalize_text(payload.get("title"))
+    try:
+        calories = int(payload.get("calories"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Calories must be numeric."}), 400
+
+    if meal_day not in DAY_NAMES or not meal_name or not meal_title:
+        return jsonify({"error": "Meal day, meal slot, and title are required."}), 400
+
+    connection = get_db()
+    connection.execute(
+        """
+        INSERT INTO meal_logs (user_id, log_date, meal_day, meal_name, meal_title, calories, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, log_date, meal_day, meal_name) DO UPDATE SET
+            meal_title = excluded.meal_title,
+            calories = excluded.calories,
+            created_at = excluded.created_at
+        """,
+        (user["id"], today_iso(), meal_day, meal_name, meal_title, calories, utc_now()),
+    )
+    connection.commit()
+
+    profile_row = fetch_profile(user["id"])
+    if profile_row is None:
+        return jsonify({"error": "Complete your intake profile first."}), 404
+
+    plan_payload = build_plan_response(user, profile_row)
+    return jsonify({"message": "Meal logged.", "progress": plan_payload["progress"]})
+
+
+@app.route("/api/progress/workouts", methods=["POST"])
+def complete_workout():
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required."}), 401
+
+    payload = json_payload()
+    workout_day = normalize_text(payload.get("day"))
+    focus = normalize_text(payload.get("focus"))
+    if workout_day not in DAY_NAMES or not focus:
+        return jsonify({"error": "Workout day and focus are required."}), 400
+    if workout_day != current_day_name():
+        return jsonify({"error": f"You can only finish the workout scheduled for {current_day_name()}."}), 400
+
+    connection = get_db()
+    connection.execute(
+        """
+        INSERT INTO workout_logs (user_id, log_date, workout_day, focus, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, log_date, workout_day, focus) DO UPDATE SET
+            created_at = excluded.created_at
+        """,
+        (user["id"], today_iso(), workout_day, focus, utc_now()),
+    )
+    connection.commit()
+
+    profile_row = fetch_profile(user["id"])
+    if profile_row is None:
+        return jsonify({"error": "Complete your intake profile first."}), 404
+
+    plan_payload = build_plan_response(user, profile_row)
+    return jsonify({"message": "Workout completed.", "progress": plan_payload["progress"]})
+
+
+@app.route("/api/progress/water", methods=["POST"])
+def log_water():
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Authentication required."}), 401
+
+    payload = json_payload()
+    try:
+        amount_ml = int(payload.get("amountMl"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Water amount must be numeric."}), 400
+
+    if amount_ml < 50 or amount_ml > 2000:
+        return jsonify({"error": "Water amount must be between 50 ml and 2000 ml."}), 400
+
+    connection = get_db()
+    connection.execute(
+        """
+        INSERT INTO water_logs (user_id, log_date, amount_ml, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (user["id"], today_iso(), amount_ml, utc_now()),
+    )
+    connection.commit()
+
+    profile_row = fetch_profile(user["id"])
+    if profile_row is None:
+        return jsonify({"error": "Complete your intake profile first."}), 404
+
+    plan_payload = build_plan_response(user, profile_row)
+    return jsonify({"message": "Water logged.", "progress": plan_payload["progress"]})
+
+
 init_db()
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5002)
+    debug_enabled = os.environ.get("NUTRIPLAN_DEBUG", "1") == "1"
+    app.run(debug=debug_enabled, use_reloader=False, port=5002)

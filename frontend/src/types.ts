@@ -53,11 +53,13 @@ export interface Summary {
 
 export interface WorkoutDay {
   day: string;
+  kind: string;
   focus: string;
   durationMinutes: number;
   intensity: string;
   exercises: string[];
   note: string;
+  suggestedWindow: string;
 }
 
 export interface MealEntry {
@@ -65,6 +67,15 @@ export interface MealEntry {
   title: string;
   calories: number;
   summary: string;
+  timeLabel: string;
+  timingContext: string;
+  imageUrl: string;
+  proteinGrams: number;
+  carbsGrams: number;
+  fatsGrams: number;
+  cookTimeMinutes: number;
+  ingredients: string[];
+  steps: string[];
 }
 
 export interface MealDay {
@@ -73,10 +84,29 @@ export interface MealDay {
   meals: MealEntry[];
 }
 
+export interface ProgressSnapshot {
+  todayCalories: number;
+  todayWaterMl: number;
+  caloriePercent: number;
+  completedMeals: string[];
+  completedWorkouts: string[];
+  workoutStreak: number;
+  completedWorkoutsCount: number;
+}
+
+export interface AiMeta {
+  provider: string;
+  model: string | null;
+  applied: boolean;
+  changed: boolean;
+}
+
 export interface PlanResponse {
   user: User;
   profile: Profile;
   summary: Summary;
+  aiMeta: AiMeta;
+  progress: ProgressSnapshot;
   workoutPlan: WorkoutDay[];
   mealPlan: MealDay[];
 }
