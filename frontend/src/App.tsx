@@ -71,11 +71,6 @@ const DIET_STYLE_LABELS: Record<DietaryStyle, string> = {
   high_protein: "High protein",
   low_carb: "Low carb",
 };
-const AUTH_COPY = {
-  title: "Welcome in, build a plan that looks coached.",
-  body:
-    "DietTricks gives you one calm place for nutrition, workouts, and profile setup. Start with account access, then move into a cleaner guided flow.",
-};
 const USER_ICON_PNG = "https://img.icons8.com/ios-filled/100/8a6b2f/user-male-circle.png";
 const LOADING_LINES = [
   "We are generating the best program for you.",
@@ -766,9 +761,8 @@ export default function App() {
   const [signupForm, setSignupForm] = useState(initialSignupForm);
   const [loginForm, setLoginForm] = useState(initialLoginForm);
   const [profileForm, setProfileForm] = useState<ProfileFormState>(initialProfileForm);
-  const [statusMessage, setStatusMessage] = useState(
-    "Shape a nutrition profile, save it once, and the studio will map meals and training around it.",
-  );
+  const [statusMessage, setStatusMessage] = useState("Sign in or create an account.");
+  const [authError, setAuthError] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<"signup" | "login" | "profile" | "refresh" | null>(
     null,
   );
@@ -842,6 +836,7 @@ export default function App() {
     value: SignupFormState[Key],
   ) {
     setSignupForm((current) => ({ ...current, [field]: value }));
+    setAuthError(null);
   }
 
   function updateLoginField<Key extends keyof LoginFormState>(
@@ -849,6 +844,7 @@ export default function App() {
     value: LoginFormState[Key],
   ) {
     setLoginForm((current) => ({ ...current, [field]: value }));
+    setAuthError(null);
   }
 
   function updateProfileField<Key extends keyof ProfileFormState>(
@@ -856,6 +852,14 @@ export default function App() {
     value: ProfileFormState[Key],
   ) {
     setProfileForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function formatAuthError(error: unknown, mode: AuthMode): string {
+    const message = error instanceof Error ? error.message : "Request failed.";
+    if (mode === "login" && message === "Invalid email or password.") {
+      return "Incorrect email or password.";
+    }
+    return message;
   }
 
   function handleAuthSuccess(response: AuthResponse, message: string) {
@@ -868,11 +872,26 @@ export default function App() {
     setActiveTab("dashboard");
     setOnboardingStep(0);
     setStatusMessage(message);
+    setAuthError(null);
   }
 
   async function handleSignup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const fullName = signupForm.fullName.trim();
+    const email = signupForm.email.trim();
+    const password = signupForm.password;
+    if (!fullName || !email || !password) {
+      setAuthError("Full name, email, and password are required.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setAuthError("Password must be at least 8 characters.");
+      return;
+    }
+
     setBusyState("signup");
+    setAuthError(null);
 
     try {
       const response = await apiRequest<AuthResponse>("/auth/signup", {
@@ -882,7 +901,7 @@ export default function App() {
       handleAuthSuccess(response, "Account created. Build your intake profile to unlock the dashboard.");
       setSignupForm(initialSignupForm);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      setAuthError(formatAuthError(error, "signup"));
     } finally {
       setBusyState(null);
     }
@@ -890,7 +909,15 @@ export default function App() {
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const email = loginForm.email.trim();
+    const password = loginForm.password;
+    if (!email || !password) {
+      setAuthError("Email and password are required.");
+      return;
+    }
+
     setBusyState("login");
+    setAuthError(null);
 
     try {
       const response = await apiRequest<AuthResponse>("/auth/login", {
@@ -905,7 +932,7 @@ export default function App() {
       );
       setLoginForm(initialLoginForm);
     } catch (error) {
-      setStatusMessage((error as Error).message);
+      setAuthError(formatAuthError(error, "login"));
     } finally {
       setBusyState(null);
     }
@@ -1047,6 +1074,7 @@ export default function App() {
     setUser(null);
     setPlan(null);
     setProfileForm(initialProfileForm);
+    setAuthError(null);
     setStatusMessage("You have been signed out.");
   }
 
@@ -1932,53 +1960,34 @@ export default function App() {
     return (
       <div className="page-shell">
         <div className="reference-frame auth-frame">
-          <section className="showcase-panel">
+          <aside className="auth-panel-shell">
             <div className="top-strip">
               <div className="brand-chip">DietTricks</div>
             </div>
-            <div className="showcase-copy">
-              <div className="eyebrow">Nutrition and training studio</div>
-              <h1>{AUTH_COPY.title}</h1>
-              <p>{AUTH_COPY.body}</p>
-            </div>
-
-            <article className="showcase-simple-card">
-              <div className="showcase-simple-visual">
-                <div className="showcase-simple-glow" />
-                <div className="showcase-simple-avatar" />
-              </div>
-              <div className="showcase-simple-copy">
-                <div className="showcase-simple-pill">Clean wellness entry</div>
-                <strong>Sign in first. Build the rest after.</strong>
-                <p>
-                  Keep the first screen focused on access. After login, the app opens meals,
-                  training, and profile setup in their own spaces.
-                </p>
-              </div>
-            </article>
-          </section>
-
-          <aside className="auth-panel-shell">
             <div className="auth-intro">
-              <div className="eyebrow">Access the studio</div>
-              <h2>Simple sign in</h2>
-              <p>Keep the first screen clean: only account access, nothing extra.</p>
+              <h2>{authMode === "login" ? "Sign in" : "Create account"}</h2>
             </div>
 
-            <div className="status-banner">{hydrating ? "Loading saved session..." : statusMessage}</div>
+            <div className="status-banner">{hydrating ? "Loading session..." : statusMessage}</div>
 
             <div className="auth-mode-switch">
               <button
                 type="button"
                 className={authMode === "login" ? "mode-chip active" : "mode-chip"}
-                onClick={() => setAuthMode("login")}
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError(null);
+                }}
               >
                 Sign in
               </button>
               <button
                 type="button"
                 className={authMode === "signup" ? "mode-chip active" : "mode-chip"}
-                onClick={() => setAuthMode("signup")}
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthError(null);
+                }}
               >
                 Create account
               </button>
@@ -1986,9 +1995,9 @@ export default function App() {
 
             <form className="auth-card auth-card-full" onSubmit={authMode === "login" ? handleLogin : handleSignup}>
               <div className="auth-card-head">
-                <span>{authMode === "login" ? "Open session" : "Start fresh"}</span>
-                <strong>{authMode === "login" ? "Welcome back" : "Create your DietTricks account"}</strong>
+                <strong>{authMode === "login" ? "Sign in to continue" : "Create your account"}</strong>
               </div>
+              {authError ? <div className="auth-error" role="alert">{authError}</div> : null}
 
               {authMode === "signup" ? (
                 <label>
@@ -2039,12 +2048,6 @@ export default function App() {
                     : "Create account"}
               </button>
             </form>
-
-            <div className="auth-footer-note">
-              <span>DietTricks branding</span>
-              <span>Clean first step</span>
-              <span>Warm color language</span>
-            </div>
           </aside>
         </div>
       </div>

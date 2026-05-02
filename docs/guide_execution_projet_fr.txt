@@ -1,0 +1,466 @@
+GUIDE D'EXECUTION DU PROJET DIETRIX / DIETTRICKS
+
+1. OBJECTIF DU PROJET
+
+Ce projet est une application locale de planification alimentaire et sportive.
+La version active du projet utilise uniquement :
+
+- frontend/       -> interface utilisateur en React + Vite + TypeScript
+- backend_api/    -> API en Flask + base de donnees SQLite
+
+Les dossiers `secure_app/` et `insecure_app/` existent dans le depot, mais ce ne sont pas les applications principales a lancer pour la version finale actuelle.
+
+
+2. PRE-REQUIS
+
+Avant d'executer le projet sur Windows, il faut installer :
+
+- Python 3
+- Node.js
+- npm
+- PowerShell
+
+Remarque :
+- npm est normalement installe automatiquement avec Node.js.
+- SQLite n'a pas besoin d'etre installe manuellement, car le projet utilise la bibliotheque SQLite integree a Python.
+
+
+3. INSTALLATION DES OUTILS SI ILS NE SONT PAS DEJA INSTALLES
+
+3.1 Installer Python
+
+Telecharger Python 3 depuis le site officiel :
+https://www.python.org/downloads/
+
+Pendant l'installation :
+- cocher "Add Python to PATH"
+- terminer l'installation normalement
+
+Pour verifier l'installation, ouvrir PowerShell et taper :
+
+```powershell
+py --version
+```
+
+ou
+
+```powershell
+python --version
+```
+
+
+3.2 Installer Node.js
+
+Telecharger Node.js depuis le site officiel :
+https://nodejs.org/
+
+Installer une version LTS.
+
+Pour verifier l'installation :
+
+```powershell
+node --version
+npm --version
+```
+
+
+4. OUVRIR LE PROJET
+
+Ouvrir PowerShell puis se placer dans le dossier du projet :
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+```
+
+Pour verifier que vous etes dans le bon dossier :
+
+```powershell
+Get-ChildItem
+```
+
+Vous devez voir notamment :
+
+- backend_api
+- frontend
+- package.json
+- requirements.txt
+- README.md
+
+
+5. CREATION DE L'ENVIRONNEMENT PYTHON
+
+Depuis la racine du projet, executer :
+
+```powershell
+py -3 -m venv .venv
+```
+
+Cette commande cree un environnement virtuel Python dans le dossier `.venv`.
+
+
+6. ACTIVATION DE L'ENVIRONNEMENT VIRTUEL
+
+Dans PowerShell, executer :
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Si PowerShell bloque l'execution des scripts, lancer d'abord :
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Puis relancer :
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Quand l'environnement est actif, vous verrez generalement `(.venv)` au debut de la ligne de commande.
+
+
+7. INSTALLATION DES DEPENDANCES PYTHON
+
+Toujours depuis le dossier racine du projet, executer :
+
+```powershell
+py -3 -m pip install -r requirements.txt
+```
+
+Le fichier `requirements.txt` contient ici la dependance principale suivante :
+
+- Flask==3.1.0
+
+
+8. INSTALLATION DES DEPENDANCES FRONTEND
+
+Toujours depuis la racine du projet, executer :
+
+```powershell
+cmd /c npm run frontend:install
+```
+
+Cette commande installe les dependances du dossier `frontend/`.
+
+
+9. LANCEMENT DU BACKEND
+
+Ouvrir un premier terminal PowerShell.
+
+Aller dans le projet :
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+```
+
+Activer l'environnement virtuel :
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Lancer le serveur backend :
+
+```powershell
+py -3 backend_api\app.py
+```
+
+Le backend demarre sur :
+
+http://127.0.0.1:5002
+
+Test de sante de l'API :
+
+http://127.0.0.1:5002/api/health
+
+Important :
+- au premier demarrage, la base locale SQLite est creee automatiquement dans `backend_api/nutriplan.db`
+- laisser ce terminal ouvert pendant l'execution du projet
+
+
+10. LANCEMENT DU FRONTEND
+
+Ouvrir un second terminal PowerShell.
+
+Aller dans le projet :
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+```
+
+Lancer le frontend :
+
+```powershell
+cmd /c npm run frontend:dev
+```
+
+Le frontend demarre normalement sur :
+
+http://localhost:5173
+
+Si le port 5173 est occupe, Vite peut utiliser un autre port, par exemple :
+
+http://localhost:5174
+
+
+11. UTILISATION DE L'APPLICATION
+
+Une fois les deux serveurs lances :
+
+- ouvrir le navigateur
+- aller sur `http://localhost:5173`
+- creer un compte utilisateur
+- se connecter
+- remplir le profil
+- consulter le tableau de bord, les repas, l'entrainement et le profil
+
+Le frontend communique avec le backend sur l'URL par defaut suivante :
+
+http://127.0.0.1:5002/api
+
+Important :
+- si Ollama est installe, lance et configure, le backend essaie de l'utiliser au moment de l'enregistrement du profil utilisateur
+- cette utilisation sert a personnaliser une partie du plan nutrition et du plan d'entrainement
+- le premier enregistrement du profil peut prendre un peu de temps selon la puissance de la machine et le modele charge
+
+
+12. ARRET DU PROJET
+
+Pour arreter le backend et le frontend :
+
+- revenir dans chaque terminal
+- appuyer sur `Ctrl + C`
+
+
+13. COMMANDES UTILES
+
+13.1 Verifier le backend sans le lancer
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+.\.venv\Scripts\Activate.ps1
+py -3 -m py_compile backend_api\app.py
+```
+
+
+13.2 Construire le frontend pour la production
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+cmd /c npm run frontend:build
+```
+
+
+13.3 Previsualiser la version de production du frontend
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+cmd /c npm run frontend:preview
+```
+
+
+14. FICHIERS IMPORTANTS DU PROJET
+
+- `backend_api/app.py`            -> serveur Flask principal
+- `frontend/src/`                -> code source de l'interface
+- `frontend/src/api.ts`          -> connexion entre frontend et backend
+- `package.json`                 -> scripts npm utilises depuis la racine
+- `requirements.txt`             -> dependances Python
+- `.env.example`                 -> exemple de variables d'environnement optionnelles
+
+
+15. CONFIGURATION OPTIONNELLE DE L'IA LOCALE
+
+Le projet peut fonctionner sans intelligence artificielle.
+La partie IA est optionnelle.
+
+Si vous voulez que le projet utilise reellement Ollama, il faut :
+
+1. Installer Ollama
+2. Telecharger un modele
+3. Creer un fichier `.env`
+4. Lancer Ollama avant le backend
+5. Enregistrer le profil d'un utilisateur dans l'application
+
+15.1 Installer Ollama sous Windows
+
+Telecharger Ollama ici :
+
+https://ollama.com/download/windows
+
+Installer normalement le programme.
+
+Pour verifier l'installation :
+
+```powershell
+ollama --version
+```
+
+
+15.2 Telecharger un modele
+
+Commande exemple pour telecharger le modele utilise par le projet :
+
+```powershell
+ollama pull deepseek-r1:1.5b
+```
+
+Pour verifier que le modele est bien disponible :
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:11434/api/tags
+```
+
+
+15.3 Creer le fichier `.env`
+
+Creer ensuite un fichier `.env` a la racine du projet a partir de `.env.example`.
+
+Contenu exemple :
+
+```env
+OLLAMA_ENABLED=1
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=deepseek-r1:1.5b
+OLLAMA_TIMEOUT_SECONDS=120
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Explication :
+
+- `OLLAMA_ENABLED=1` active l'utilisation d'Ollama
+- `OLLAMA_BASE_URL` indique l'adresse locale du service Ollama
+- `OLLAMA_MODEL` indique le modele a utiliser
+- `OLLAMA_TIMEOUT_SECONDS=120` laisse plus de temps au backend pour attendre la reponse du modele
+
+
+15.4 Demarrer Ollama
+
+En general, Ollama se lance automatiquement apres l'installation.
+Sinon, ouvrir Ollama depuis le menu Demarrer de Windows.
+
+Pour verifier que le service repond :
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:11434/api/tags
+```
+
+
+15.5 Comment le projet utilise Ollama
+
+Dans ce projet, Ollama est utilise par le backend Flask.
+
+Le fonctionnement est le suivant :
+
+- l'utilisateur cree un compte
+- l'utilisateur remplit son profil
+- au moment de la sauvegarde du profil, le backend contacte Ollama
+- Ollama aide a personnaliser le plan genere
+- si Ollama ne repond pas, le projet continue avec le mode normal sans IA
+
+Autrement dit :
+- le projet fonctionne sans Ollama
+- mais si Ollama est actif, il est reellement utilise au moment de l'enregistrement du profil
+
+
+15.6 Comment verifier que le projet utilise vraiment Ollama
+
+1. Lancer Ollama
+2. Lancer le backend
+3. Lancer le frontend
+4. Ouvrir l'application
+5. Creer un compte
+6. Remplir et sauvegarder le profil
+
+Si Ollama fonctionne correctement, le backend utilise le modele local pour enrichir le plan.
+
+Remarque importante :
+- avec le modele `deepseek-r1:1.5b`, la sauvegarde du profil peut prendre environ 1 minute
+- cela depend de la vitesse de la machine
+
+Cette partie reste facultative. Le projet fonctionne meme sans fichier `.env` ou sans Ollama, mais dans ce cas il utilisera le mode local standard sans IA.
+
+
+16. PROBLEMES FREQUENTS ET SOLUTIONS
+
+Probleme 1 : `py` n'est pas reconnu
+Solution :
+- verifier que Python est bien installe
+- redemarrer le terminal
+- reinstaller Python en cochant "Add Python to PATH"
+
+Probleme 2 : `node` ou `npm` n'est pas reconnu
+Solution :
+- installer Node.js
+- fermer puis rouvrir PowerShell
+
+Probleme 3 : erreur lors de `Activate.ps1`
+Solution :
+- executer :
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Probleme 4 : le frontend ne s'affiche pas correctement
+Solution :
+- verifier que le backend tourne sur `http://127.0.0.1:5002`
+- verifier que le frontend tourne sur `http://localhost:5173`
+- actualiser avec `Ctrl + F5`
+
+Probleme 5 : le port 5173 ou 5002 est deja utilise
+Solution :
+- fermer les anciens processus
+- relancer le projet
+- pour le frontend, Vite peut automatiquement changer de port
+
+
+17. RESUME RAPIDE DES COMMANDES PRINCIPALES
+
+Depuis la racine du projet :
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+py -3 -m pip install -r requirements.txt
+cmd /c npm run frontend:install
+```
+
+Terminal 1 :
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+.\.venv\Scripts\Activate.ps1
+py -3 backend_api\app.py
+```
+
+Terminal 2 :
+
+```powershell
+cd c:\Users\admin\university\s8\diet\Dietrix
+cmd /c npm run frontend:dev
+```
+
+
+18. CONCLUSION
+
+Pour executer correctement ce projet, il faut :
+
+- installer Python et Node.js
+- creer et activer l'environnement virtuel Python
+- installer les dependances Python
+- installer les dependances frontend
+- lancer le backend
+- lancer le frontend
+- ouvrir l'application dans le navigateur
+
+Adresse principale de l'application :
+
+http://localhost:5173
+
+Adresse principale du backend :
+
+http://127.0.0.1:5002

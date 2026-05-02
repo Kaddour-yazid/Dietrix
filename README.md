@@ -7,6 +7,7 @@ DietTricks is a diet and training planner built with:
 - `backend_api/nutriplan.db`: local database created automatically
 
 The app is now a local-first build. Supabase is not used. User accounts, profile data, meal logs, workout logs, and water logs are stored in SQLite.
+SQLCipher can be enabled for the main backend database through `NUTRIPLAN_DB_PASSPHRASE`.
 
 ## What We Changed
 
@@ -48,6 +49,7 @@ The app is now a local-first build. Supabase is not used. User accounts, profile
 - TypeScript 5
 - Flask 3
 - SQLite
+- SQLCipher (optional, for encrypted local storage)
 - Ollama (optional)
 
 ## Project Structure
@@ -107,6 +109,20 @@ Frontend:
 
 If `5173` is busy, Vite will print another port such as `5174`.
 
+## French Execution Guide
+
+For a full French walkthrough with installation, PowerShell commands, Ollama setup, and troubleshooting, see:
+
+- `docs/guide_execution_projet_fr.txt`
+
+That guide covers:
+
+- Windows prerequisites and installation of Python and Node.js
+- creation and activation of the virtual environment
+- backend and frontend startup commands
+- optional Ollama setup and verification
+- common execution issues and fixes
+
 ## Optional Local AI With Ollama
 
 DietTricks works without AI. If Ollama is installed, the backend can try a local model to refine meals and workouts.
@@ -129,15 +145,43 @@ Example:
 OLLAMA_ENABLED=1
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=deepseek-r1:1.5b
+OLLAMA_TIMEOUT_SECONDS=120
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+NUTRIPLAN_DB_PASSPHRASE=change_me_before_using_sqlcipher
 ```
 
 Notes:
 
 - `.env` is ignored and should not be committed.
 - OpenAI is optional.
+- `OLLAMA_TIMEOUT_SECONDS=120` gives the backend more time to wait for slower local model responses.
 - If no AI provider is available, the app falls back to the built-in rule-based planner.
+
+## Optional Database Encryption With SQLCipher
+
+If you want the main backend database encrypted at rest, set `NUTRIPLAN_DB_PASSPHRASE` in `.env`.
+
+For a brand-new database:
+
+- set `NUTRIPLAN_DB_PASSPHRASE`
+- start the backend normally
+- `backend_api/nutriplan.db` will be created as a SQLCipher database
+
+For the existing plaintext `backend_api/nutriplan.db` already in this repo:
+
+```powershell
+cd C:\Users\Click\Desktop\diet\mlds
+py -3 backend_api\migrate_to_sqlcipher.py
+```
+
+That script:
+
+- exports the current plaintext SQLite database into an encrypted SQLCipher database
+- replaces `backend_api/nutriplan.db` with the encrypted version
+- keeps a backup at `backend_api/nutriplan.plaintext.bak`
+
+After migration, keep `NUTRIPLAN_DB_PASSPHRASE` set before starting the backend.
 
 ## How The App Works
 

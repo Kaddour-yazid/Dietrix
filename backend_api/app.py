@@ -15,8 +15,14 @@ from flask import Flask, g, jsonify, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
+try:
+    from sqlcipher3 import dbapi2 as sqlcipher3
+except ImportError:
+    sqlcipher3 = None
+
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "nutriplan.db"
+DB_PASSPHRASE_ENV = "NUTRIPLAN_DB_PASSPHRASE"
 AI_PLAN_CACHE: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]] = {}
 
 
@@ -90,12 +96,72 @@ def current_day_name() -> str:
     return DAY_NAMES[datetime.now().date().weekday()]
 
 
+def database_passphrase() -> str | None:
+    value = os.environ.get(DB_PASSPHRASE_ENV, "").strip()
+    return value or None
+
+
+def sql_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def sqlite_file_header(path: Path) -> bytes:
+    if not path.exists():
+        return b""
+    with path.open("rb") as file_obj:
+        return file_obj.read(16)
+
+
+def is_plaintext_sqlite_database(path: Path) -> bool:
+    return sqlite_file_header(path).startswith(b"SQLite format 3\x00")
+
+
+def configure_connection(connection: sqlite3.Connection, passphrase: str | None) -> sqlite3.Connection:
+    if passphrase is not None:
+        connection.execute(f"PRAGMA key = {sql_quote(passphrase)}")
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def open_database_connection(path: Path = DB_PATH) -> sqlite3.Connection:
+    passphrase = database_passphrase()
+
+    if passphrase is None:
+        if path.exists() and not is_plaintext_sqlite_database(path):
+            raise RuntimeError(
+                f"{path.name} does not look like a plaintext SQLite database. "
+                f"If it was migrated to SQLCipher, set {DB_PASSPHRASE_ENV} before starting the backend."
+            )
+        return configure_connection(sqlite3.connect(path), None)
+
+    if sqlcipher3 is None:
+        raise RuntimeError(
+            "SQLCipher support is enabled, but the sqlcipher3 package is not installed. "
+            "Install dependencies from requirements.txt."
+        )
+
+    if path.exists() and is_plaintext_sqlite_database(path):
+        raise RuntimeError(
+            f"{path.name} is still plaintext SQLite. Run backend_api/migrate_to_sqlcipher.py after setting "
+            f"{DB_PASSPHRASE_ENV} to migrate the database first."
+        )
+
+    connection = configure_connection(sqlcipher3.connect(path), passphrase)
+    try:
+        connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except Exception as exc:
+        connection.close()
+        raise RuntimeError(
+            "Unable to open the SQLCipher database. Check the configured passphrase or migrate the database first."
+        ) from exc
+    return connection
+
+
 def get_db() -> sqlite3.Connection:
     connection = g.get("db")
     if connection is None:
-        connection = sqlite3.connect(DB_PATH)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
+        connection = open_database_connection(DB_PATH)
         g.db = connection
     return connection
 
@@ -108,8 +174,7 @@ def close_db(_error: BaseException | None) -> None:
 
 
 def init_db() -> None:
-    connection = sqlite3.connect(DB_PATH)
-    connection.execute("PRAGMA foreign_keys = ON")
+    connection = open_database_connection(DB_PATH)
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -864,29 +929,50 @@ def merge_ai_enhancement(
     parsed: dict[str, Any], meal_plan: list[dict[str, Any]], workout_plan: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ai_meals = parsed.get("mealPlan")
+    ai_meal_guidance = parsed.get("mealGuidance")
     ai_workouts = parsed.get("workoutPlan")
-    if not isinstance(ai_meals, list) or not isinstance(ai_workouts, list):
+    if not isinstance(ai_workouts, list):
         return meal_plan, workout_plan
 
-    enhanced_meals = []
-    for day_index, day in enumerate(meal_plan):
-        ai_day = ai_meals[day_index] if day_index < len(ai_meals) and isinstance(ai_meals[day_index], dict) else {}
-        ai_entries = ai_day.get("meals") if isinstance(ai_day.get("meals"), list) else []
-        merged_entries = []
-        for meal_index, meal in enumerate(day["meals"]):
-            ai_meal = ai_entries[meal_index] if meal_index < len(ai_entries) and isinstance(ai_entries[meal_index], dict) else {}
-            title = normalize_text(ai_meal.get("title")) or meal["title"]
-            merged_entries.append(
-                {
-                    **meal,
-                    "title": title,
-                    "summary": normalize_text(ai_meal.get("summary")) or meal["summary"],
-                    "timeLabel": normalize_text(ai_meal.get("timeLabel")) or meal["timeLabel"],
-                    "timingContext": normalize_text(ai_meal.get("timingContext")) or meal["timingContext"],
-                    "imageUrl": meal_image_url(title),
-                }
-            )
-        enhanced_meals.append({**day, "meals": merged_entries})
+    if isinstance(ai_meals, list):
+        enhanced_meals = []
+        for day_index, day in enumerate(meal_plan):
+            ai_day = ai_meals[day_index] if day_index < len(ai_meals) and isinstance(ai_meals[day_index], dict) else {}
+            ai_entries = ai_day.get("meals") if isinstance(ai_day.get("meals"), list) else []
+            merged_entries = []
+            for meal_index, meal in enumerate(day["meals"]):
+                ai_meal = ai_entries[meal_index] if meal_index < len(ai_entries) and isinstance(ai_entries[meal_index], dict) else {}
+                title = normalize_text(ai_meal.get("title")) or meal["title"]
+                merged_entries.append(
+                    {
+                        **meal,
+                        "title": title,
+                        "summary": normalize_text(ai_meal.get("summary")) or meal["summary"],
+                        "timeLabel": normalize_text(ai_meal.get("timeLabel")) or meal["timeLabel"],
+                        "timingContext": normalize_text(ai_meal.get("timingContext")) or meal["timingContext"],
+                        "imageUrl": meal_image_url(title),
+                    }
+                )
+            enhanced_meals.append({**day, "meals": merged_entries})
+    elif isinstance(ai_meal_guidance, dict):
+        enhanced_meals = []
+        for day in meal_plan:
+            merged_entries = []
+            for meal in day["meals"]:
+                guidance = ai_meal_guidance.get(meal["name"])
+                if not isinstance(guidance, dict) and meal["name"].startswith("Snack"):
+                    guidance = ai_meal_guidance.get("Snack")
+                guidance = guidance if isinstance(guidance, dict) else {}
+                merged_entries.append(
+                    {
+                        **meal,
+                        "summary": normalize_text(guidance.get("summary")) or meal["summary"],
+                        "timingContext": normalize_text(guidance.get("timingContext")) or meal["timingContext"],
+                    }
+                )
+            enhanced_meals.append({**day, "meals": merged_entries})
+    else:
+        return meal_plan, workout_plan
 
     enhanced_workouts = []
     for day_index, workout in enumerate(workout_plan):
@@ -911,6 +997,154 @@ def ai_meta(provider: str, model: str | None, applied: bool, changed: bool) -> d
     }
 
 
+def compact_profile_for_ai(profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "age": profile.get("age"),
+        "sex": profile.get("sex"),
+        "heightCm": profile.get("heightCm"),
+        "weightKg": profile.get("weightKg"),
+        "goal": profile.get("goal"),
+        "activityLevel": profile.get("activityLevel"),
+        "workoutsPerWeek": profile.get("workoutsPerWeek"),
+        "dailyCalorieTarget": profile.get("dailyCalorieTarget"),
+        "mealsPerDay": profile.get("mealsPerDay"),
+        "dietaryStyle": profile.get("dietaryStyle"),
+        "likes": profile.get("likes", []),
+        "dislikes": profile.get("dislikes", []),
+        "allergies": profile.get("allergies", []),
+        "notes": profile.get("notes", ""),
+    }
+
+
+def compact_summary_for_ai(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "bmi": summary.get("bmi"),
+        "bmiCategory": summary.get("bmiCategory"),
+        "maintenanceCalories": summary.get("maintenanceCalories"),
+        "recommendedCalories": summary.get("recommendedCalories"),
+        "calorieTarget": summary.get("calorieTarget"),
+        "proteinGrams": summary.get("proteinGrams"),
+        "waterLiters": summary.get("waterLiters"),
+    }
+
+
+def compact_meal_plan_for_ai(meal_plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact_days: list[dict[str, Any]] = []
+    for day in meal_plan:
+        compact_days.append(
+            {
+                "day": day["day"],
+                "meals": [
+                    {
+                        "name": meal["name"],
+                        "title": meal["title"],
+                        "summary": meal["summary"],
+                        "timeLabel": meal["timeLabel"],
+                        "timingContext": meal["timingContext"],
+                    }
+                    for meal in day["meals"]
+                ],
+            }
+        )
+    return compact_days
+
+
+def compact_workout_plan_for_ai(workout_plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "day": workout["day"],
+            "kind": workout["kind"],
+            "focus": workout["focus"],
+            "note": workout["note"],
+            "suggestedWindow": workout["suggestedWindow"],
+        }
+        for workout in workout_plan
+    ]
+
+
+def meal_slot_names(meal_plan: list[dict[str, Any]]) -> list[str]:
+    if not meal_plan:
+        return []
+    return [normalize_text(meal["name"]) for meal in meal_plan[0]["meals"] if normalize_text(meal["name"])]
+
+
+def current_meal_guidance_for_ai(meal_plan: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    guidance: dict[str, dict[str, str]] = {}
+    for day in meal_plan:
+        for meal in day["meals"]:
+            name = normalize_text(meal["name"])
+            if name and name not in guidance:
+                guidance[name] = {
+                    "summary": meal["summary"],
+                    "timingContext": meal["timingContext"],
+                }
+    return guidance
+
+
+def build_ollama_enhancement_schema(meal_slots: list[str], workout_count: int) -> dict[str, Any]:
+    meal_guidance_properties = {
+        meal_slot: {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "timingContext": {"type": "string"},
+            },
+            "required": ["summary", "timingContext"],
+            "additionalProperties": False,
+        }
+        for meal_slot in meal_slots
+    }
+
+    return {
+        "type": "object",
+        "properties": {
+            "mealGuidance": {
+                "type": "object",
+                "properties": meal_guidance_properties,
+                "required": meal_slots,
+                "additionalProperties": False,
+            },
+            "workoutPlan": {
+                "type": "array",
+                "minItems": workout_count,
+                "maxItems": workout_count,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "focus": {"type": "string"},
+                        "note": {"type": "string"},
+                        "suggestedWindow": {"type": "string"},
+                    },
+                    "required": ["focus", "note", "suggestedWindow"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["mealGuidance", "workoutPlan"],
+        "additionalProperties": False,
+    }
+
+
+def parse_ai_json_content(raw_content: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_content, str):
+        return None
+
+    content = raw_content.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def try_ollama_enhancement(
     profile: dict[str, Any], summary: dict[str, Any], meal_plan: list[dict[str, Any]], workout_plan: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -919,33 +1153,44 @@ def try_ollama_enhancement(
 
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
     model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:1.5b")
+    timeout_seconds = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "120"))
+    meal_slots = meal_slot_names(meal_plan)
+    if not meal_slots:
+        return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
+
+    response_schema = build_ollama_enhancement_schema(meal_slots, len(workout_plan))
+    compact_workout_plan = compact_workout_plan_for_ai(workout_plan)
     payload = {
         "model": model,
         "stream": False,
-        "format": "json",
+        "format": response_schema,
         "think": False,
+        "options": {"temperature": 0},
         "messages": [
             {
                 "role": "system",
                 "content": (
                     "You are a precise nutrition and training planner. "
-                    "Return valid JSON only with keys mealPlan and workoutPlan."
+                    "Return valid JSON matching the response schema only. "
+                    "Rewrite the meal guidance and workout notes in fresh wording. "
+                    "Keep each field concise, realistic, and helpful."
                 ),
             },
             {
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "profile": profile,
-                        "summary": summary,
-                        "mealPlan": meal_plan,
-                        "workoutPlan": workout_plan,
+                        "profile": compact_profile_for_ai(profile),
+                        "summary": compact_summary_for_ai(summary),
+                        "mealSlots": meal_slots,
+                        "currentMealGuidance": current_meal_guidance_for_ai(meal_plan),
+                        "workoutPlan": compact_workout_plan,
                         "rules": [
-                            "Keep the same number of days and meal slots.",
                             "Keep allergies and dislikes out.",
-                            "Keep titles realistic and professional.",
-                            "Meal entries must include title, summary, timeLabel, timingContext.",
-                            "Workout entries must include focus, note, suggestedWindow.",
+                            "Keep the same meal slot order and the same number of workout days.",
+                            "Do not reuse the exact current wording when a better phrasing is possible.",
+                            "Meal guidance should stay generic enough to fit every day for that meal slot.",
+                            "Workout entries must include focus, note, and suggestedWindow only.",
                         ],
                     }
                 ),
@@ -961,10 +1206,11 @@ def try_ollama_enhancement(
     )
 
     try:
-        with urllib.request.urlopen(request_obj, timeout=45) as response:
+        with urllib.request.urlopen(request_obj, timeout=timeout_seconds) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
-        content = response_payload.get("message", {}).get("content", "")
-        parsed = json.loads(content)
+        parsed = parse_ai_json_content(response_payload.get("message", {}).get("content"))
+        if parsed is None:
+            return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
     except Exception:
         return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
 
@@ -982,6 +1228,8 @@ def try_openai_enhancement(
         return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
 
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    compact_meal_plan = compact_meal_plan_for_ai(meal_plan)
+    compact_workout_plan = compact_workout_plan_for_ai(workout_plan)
     payload = {
         "model": model,
         "response_format": {"type": "json_object"},
@@ -990,17 +1238,22 @@ def try_openai_enhancement(
                 "role": "system",
                 "content": (
                     "You are a precise nutrition and training planner. "
-                    "Return valid JSON only with keys mealPlan and workoutPlan."
+                    "Return valid JSON only with keys mealPlan and workoutPlan. "
+                    "Keep the same number of days and meal slots. "
+                    "Do not add extra commentary. "
+                    "For mealPlan, each day must include day and meals, and each meal must only include "
+                    "title, summary, timeLabel, timingContext. "
+                    "For workoutPlan, each entry must only include focus, note, suggestedWindow."
                 ),
             },
             {
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "profile": profile,
-                        "summary": summary,
-                        "mealPlan": meal_plan,
-                        "workoutPlan": workout_plan,
+                        "profile": compact_profile_for_ai(profile),
+                        "summary": compact_summary_for_ai(summary),
+                        "mealPlan": compact_meal_plan,
+                        "workoutPlan": compact_workout_plan,
                         "rules": [
                             "Keep the same number of days and meal slots.",
                             "Keep allergies and dislikes out.",
@@ -1028,8 +1281,9 @@ def try_openai_enhancement(
     try:
         with urllib.request.urlopen(request_obj, timeout=18) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
-        content = response_payload["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        parsed = parse_ai_json_content(response_payload["choices"][0]["message"]["content"])
+        if parsed is None:
+            return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
     except Exception:
         return meal_plan, workout_plan, ai_meta("rule_based", None, False, False)
 
